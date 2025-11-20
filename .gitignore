@@ -1,0 +1,23 @@
+# ROS 2 build folders
+build/
+install/
+log/
+local_setup.bash
+local_setup.sh
+local_setup.zsh
+setup.bash
+setup.sh
+setup.zsh
+COLCON_IGNORE
+
+# Python
+__pycache__/
+*.py[cod]
+
+# C++
+*.a
+*.o
+*.so
+
+# VS Code
+.vscode/
