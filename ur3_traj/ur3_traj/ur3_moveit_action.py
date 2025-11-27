@@ -5,6 +5,7 @@ from rclpy.action import ActionClient
 import time
 import copy
 import math # Import nécessaire pour PI
+from geometry_msgs.msg import Pose, Point, Quaternion
 
 # Messages ROS2 / MoveIt
 from moveit_msgs.action import MoveGroup, ExecuteTrajectory
@@ -33,6 +34,9 @@ class UR3MoveItActionClient(Node):
         self._execute_action_client.wait_for_server()
         self._compute_cartesian_client.wait_for_service()
         print("Connecté !")
+        self.target_pose = Pose(
+        position=Point(x=0.3, y=-0.2, z=0.2),
+        orientation=Quaternion(x=0.0, y=1.0, z=0.0, w=0.0))
 
     def joint_state_callback(self, msg):
         self._latest_joint_state = msg
@@ -123,6 +127,71 @@ class UR3MoveItActionClient(Node):
         self._send_exec_future.add_done_callback(self.goal_response_callback)
 
     # ---------------------------------------------------------
+    # 3. COMMANDE DE POSE (Planning OMPL)
+    # ---------------------------------------------------------
+    def send_pose_goal(self, target_pose, tolerance=0.01):
+        """
+        Demande au planificateur (OMPL) de trouver un chemin vers une pose (Position + Orientation).
+        Ce n'est PAS une ligne droite, le robot va contourner les obstacles si besoin.
+        """
+        self.movement_done = False
+        self.success = False
+        print(f"\n--- Envoi Commande Pose (IK Planning) ---")
+
+        goal_msg = MoveGroup.Goal()
+        goal_msg.request.workspace_parameters.header.frame_id = "base_link"
+        goal_msg.request.group_name = "ur_manipulator"
+        goal_msg.request.allowed_planning_time = 5.0
+        goal_msg.request.num_planning_attempts = 10
+
+        # Création des contraintes
+        constraints = Constraints()
+
+        # --- A. Contrainte de Position ---
+        # Pour MoveIt, une contrainte de position est un "Volume" (BoundingVolume)
+        # dans lequel le lien (tool0) doit se trouver.
+        pc = PositionConstraint()
+        pc.header.frame_id = "base_link"
+        pc.link_name = "tool0"
+        pc.weight = 1.0
+        
+        # On définit une "boîte" de tolérance autour du point cible
+        box = SolidPrimitive()
+        box.type = SolidPrimitive.BOX
+        box.dimensions = [tolerance, tolerance, tolerance] # x, y, z dimensions
+        
+        # La pose de cette boîte est la position cible
+        box_pose = Pose()
+        box_pose.position = target_pose.position
+        box_pose.orientation.w = 1.0 # L'orientation de la boite elle-même n'importe pas
+
+        bv = BoundingVolume()
+        bv.primitives.append(box)
+        bv.primitive_poses.append(box_pose)
+        
+        pc.constraint_region = bv
+        constraints.position_constraints.append(pc)
+
+        # --- B. Contrainte d'Orientation ---
+        oc = OrientationConstraint()
+        oc.header.frame_id = "base_link"
+        oc.link_name = "tool0"
+        oc.orientation = target_pose.orientation
+        oc.absolute_x_axis_tolerance = tolerance
+        oc.absolute_y_axis_tolerance = tolerance
+        oc.absolute_z_axis_tolerance = tolerance
+        oc.weight = 1.0
+        
+        constraints.orientation_constraints.append(oc)
+
+        # Ajout des contraintes à la requête
+        goal_msg.request.goal_constraints.append(constraints)
+
+        # Envoi
+        self._send_goal_future = self._move_action_client.send_goal_async(goal_msg)
+        self._send_goal_future.add_done_callback(self.goal_response_callback)
+
+    # ---------------------------------------------------------
     # CALLBACKS
     # ---------------------------------------------------------
     def goal_response_callback(self, future):
@@ -145,6 +214,59 @@ class UR3MoveItActionClient(Node):
             self.success = False
         self.movement_done = True
 
+    def traj(self):
+        waypoints = []
+        w0 = copy.deepcopy(self.target_pose)
+        waypoints.append(w0)
+        for i in range(50):
+            w_up = copy.deepcopy(waypoints[-1])
+            w_up.position.z += 0.002
+            w_up.position.y -= 0.002
+
+            waypoints.append(w_up)  
+        return waypoints
+    
+    def func(self, x):
+        return x**2 / 0.3  
+    
+    def generate_math_path(self, func, x_start, x_end, num_steps=50):
+        """
+        Génère des waypoints basés sur une fonction mathématique z = f(x).
+        Le mouvement se fera dans le plan X-Z du robot (avance et monte/descend).
+        
+        :param func: Une fonction lambda ou def, ex: lambda x: x**2
+        :param x_start: Valeur x de départ (relative à la pose actuelle)
+        :param x_end: Valeur x de fin
+        :param num_steps: Nombre de points pour lisser la courbe
+        """
+        waypoints = []
+        
+        # On part de la position cible actuelle (ou self.target_pose)
+        base_pose = copy.deepcopy(self.target_pose)
+        
+        # Calcul du pas
+        step_size = (x_end - x_start) / num_steps
+
+        for i in range(num_steps + 1):
+            x_math = x_start + (i * step_size)
+            
+            z_math = func(x_math)
+            
+            w_pose = copy.deepcopy(base_pose)
+            
+            w_pose.position.x -= x_math
+            w_pose.position.z += z_math
+            
+            waypoints.append(w_pose)
+            
+        return waypoints
+    
+    def euler_to_quaternion(self, roll, pitch, yaw):
+        qx = math.sin(roll/2) * math.cos(pitch/2) * math.cos(yaw/2) - math.cos(roll/2) * math.sin(pitch/2) * math.sin(yaw/2)
+        qy = math.cos(roll/2) * math.sin(pitch/2) * math.cos(yaw/2) + math.sin(roll/2) * math.cos(pitch/2) * math.sin(yaw/2)
+        qz = math.cos(roll/2) * math.cos(pitch/2) * math.sin(yaw/2) - math.sin(roll/2) * math.sin(pitch/2) * math.cos(yaw/2)
+        qw = math.cos(roll/2) * math.cos(pitch/2) * math.cos(yaw/2) + math.sin(roll/2) * math.sin(pitch/2) * math.sin(yaw/2)
+        return Quaternion(x=qx, y=qy, z=qz, w=qw)
 
 def main(args=None):
     rclpy.init(args=args)
@@ -154,55 +276,33 @@ def main(args=None):
     while ur3_client._latest_joint_state is None:
         rclpy.spin_once(ur3_client, timeout_sec=0.1)
 
-    # --- A. CONFIGURATION DU POINT DE DÉPART (EN ANGLES) ---
-    # Ces angles placent le robot dans une position sûre pour démarrer (tête en bas)
-    # Pan, Lift, Elbow, Wrist1, Wrist2, Wrist3 (en radians)
-    start_joints = [0.0, -1.57, -1.57, -1.57, 1.57, 0.0]
-
-    # --- B. DÉFINITION DE LA TRAJECTOIRE CARTÉSIENNE ---
-    # Note : Le premier point DOIT être proche de la position atteinte par start_joints
-    # Avec start_joints ci-dessus, on arrive environ à : x=0.1, y=0.3, z=0.3 (à vérifier selon le robot)
-    
-    # On définit une orientation "tête en bas" (Standard UR : rotation 180 autour de Y)
-    # w=0, x=0, y=1, z=0
-    
-    p1 = Pose()
-    p1.position.x = 0.2
-    p1.position.y = 0.2
-    p1.position.z = 0.3
-    p1.orientation.w = 0.0; p1.orientation.x = 0.0; p1.orientation.y = 1.0; p1.orientation.z = 0.0
-    
-    waypoints = []
-    waypoints.append(p1) 
-    
-    p2 = copy.deepcopy(p1); p2.position.y -= 0.15; waypoints.append(p2)
-    p3 = copy.deepcopy(p2); p3.position.z -= 0.10; waypoints.append(p3)
-    p4 = copy.deepcopy(p3); p4.position.y += 0.10; waypoints.append(p4)
     
     try:
-        # 1. D'ABORD : On bouge en articulaires (Joints)
-        # C'est beaucoup plus sûr que "send_pose_goal" pour la première approche
-        ur3_client.send_joint_goal(start_joints)
+        
+        ur3_client.send_pose_goal(ur3_client.target_pose)
         if not ur3_client.wait_for_completion():
-            print("Échec de la mise en place joint.")
-            return 
+            print("Échec du Pose Goal.")
+            return
+        time.sleep(1.0)
 
-        time.sleep(0.5)
-
-        # 2. ENSUITE : On lance la trajectoire carrée
-        # Note : Comme on a bougé en joints, on n'est pas *exactement* sur P1 au début.
-        # MoveIt va calculer le chemin de "Là où on est" -> "P1" -> "P2"...
-        ur3_client.send_cartesian_path(waypoints)
+        # ---------------------------------------------------------
+        # ETAPE 3 : Mouvement Linéaire (Cartesian Path)
+        # ---------------------------------------------------------
+        print("\n--- Préparation Trajectoire Linéaire ---")
+        
+        ur3_client.send_cartesian_path(ur3_client.generate_math_path(
+            ur3_client.func, x_start=0.0, x_end=0.3))
         ur3_client.wait_for_completion()
         
         print("Script terminé avec succès.")
-            
+
     except KeyboardInterrupt:
         pass
     except Exception as e:
-        print(e)
-
-    rclpy.shutdown()
+        print(f"Erreur critique : {e}")
+    finally:
+        # Bonne pratique : s'assurer que ROS s'éteint proprement
+        rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
