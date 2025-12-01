@@ -1,9 +1,6 @@
 from setuptools import find_packages, setup
-import os
-from glob import glob
-from setuptools import setup
 
-package_name = 'ur3_traj'
+package_name = 'tp_zoo'
 
 setup(
     name=package_name,
@@ -13,7 +10,6 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),      
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -28,9 +24,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'pose_robot = ur3_traj.pose_robot:main',
-            'ur3_moveit_action = ur3_traj.ur3_moveit_action:main',
-            'scene_object = ur3_traj.scene_object:main',
+            'detectron2_node = tp_zoo.detectron2_node:main',
+            'yolo_seg_node = tp_zoo.yolo_seg_node:main'
         ],
     },
 )

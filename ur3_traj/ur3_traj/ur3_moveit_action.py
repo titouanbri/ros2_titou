@@ -6,6 +6,10 @@ import time
 import copy
 import math # Import nécessaire pour PI
 from geometry_msgs.msg import Pose, Point, Quaternion
+import numpy as np
+from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import Slerp
+from scipy.interpolate import interp1d
 
 # Messages ROS2 / MoveIt
 from moveit_msgs.action import MoveGroup, ExecuteTrajectory
@@ -35,8 +39,10 @@ class UR3MoveItActionClient(Node):
         self._compute_cartesian_client.wait_for_service()
         print("Connecté !")
         self.target_pose = Pose(
-        position=Point(x=0.3, y=-0.2, z=0.2),
+        position=Point(x=0.06, y=0.25, z=0.30),
         orientation=Quaternion(x=0.0, y=1.0, z=0.0, w=0.0))
+        self.velocity_factor = 0.1 
+        self.acceleration_factor = 0.1 
 
     def joint_state_callback(self, msg):
         self._latest_joint_state = msg
@@ -60,6 +66,8 @@ class UR3MoveItActionClient(Node):
         goal_msg.request.workspace_parameters.header.frame_id = "base_link"
         goal_msg.request.group_name = "ur_manipulator"
         goal_msg.request.allowed_planning_time = 5.0
+        goal_msg.request.max_velocity_scaling_factor = self.velocity_factor
+        goal_msg.request.max_acceleration_scaling_factor = self.acceleration_factor
         
         # Ordre des joints pour UR : Pan, Lift, Elbow, Wrist1, Wrist2, Wrist3
         joint_names = ["shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
@@ -143,7 +151,10 @@ class UR3MoveItActionClient(Node):
         goal_msg.request.group_name = "ur_manipulator"
         goal_msg.request.allowed_planning_time = 5.0
         goal_msg.request.num_planning_attempts = 10
-
+        goal_msg.request.max_velocity_scaling_factor = self.velocity_factor
+        goal_msg.request.max_acceleration_scaling_factor = self.acceleration_factor
+        goal_msg.request.pipeline_id = "pilz_industrial_motion_planner"
+        goal_msg.request.planner_id = "PTP"
         # Création des contraintes
         constraints = Constraints()
 
@@ -267,6 +278,64 @@ class UR3MoveItActionClient(Node):
         qz = math.cos(roll/2) * math.cos(pitch/2) * math.sin(yaw/2) - math.sin(roll/2) * math.sin(pitch/2) * math.cos(yaw/2)
         qw = math.cos(roll/2) * math.cos(pitch/2) * math.cos(yaw/2) + math.sin(roll/2) * math.sin(pitch/2) * math.sin(yaw/2)
         return Quaternion(x=qx, y=qy, z=qz, w=qw)
+    
+
+    def interpoler_poses(self, liste_poses, nombre_points_total):
+        """
+        Interpole une liste de poses ROS et renvoie une liste de Poses ROS.
+        """
+        # --- 1. CONVERSION INPUT (Pose -> [x,y,z,qx,qy,qz,qw]) ---
+        numeric_poses = []
+        for p in liste_poses:
+            # On extrait les valeurs des objets Pose
+            valeurs = [
+                p.position.x, p.position.y, p.position.z,
+                p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w
+            ]
+            numeric_poses.append(valeurs)
+        
+        # Maintenant c'est une vraie matrice 2D de nombres
+        poses = np.array(numeric_poses)
+        
+        # --- 2. CALCULS (Inchangé) ---
+        positions = poses[:, :3]  # x, y, z
+        quaternions = poses[:, 3:] # qx, qy, qz, qw
+        
+        temps_cles = np.arange(len(poses))
+        temps_cibles = np.linspace(0, len(poses) - 1, nombre_points_total)
+        
+        # Interpolation Position
+        interpolateur_pos = interp1d(temps_cles, positions, axis=0, kind='linear')
+        nouvelles_positions = interpolateur_pos(temps_cibles)
+        
+        # Interpolation Orientation (Slerp)
+        rotations = R.from_quat(quaternions)
+        slerp = Slerp(temps_cles, rotations)
+        nouvelles_rotations = slerp(temps_cibles)
+        nouveaux_quats = nouvelles_rotations.as_quat()
+        
+        # --- 3. CONVERSION OUTPUT (Nombres -> Pose Objects) ---
+        resultat_final = []
+        
+        # On boucle sur les positions et quaternions générés
+        for i in range(len(nouvelles_positions)):
+            pos = nouvelles_positions[i]
+            quat = nouveaux_quats[i]
+            
+            p = Pose()
+            p.position.x = pos[0]
+            p.position.y = pos[1]
+            p.position.z = pos[2]
+            
+            p.orientation.x = quat[0]
+            p.orientation.y = quat[1]
+            p.orientation.z = quat[2]
+            p.orientation.w = quat[3]
+            
+            resultat_final.append(p)
+        
+        return resultat_final
+
 
 def main(args=None):
     rclpy.init(args=args)
@@ -288,11 +357,15 @@ def main(args=None):
         # ---------------------------------------------------------
         # ETAPE 3 : Mouvement Linéaire (Cartesian Path)
         # ---------------------------------------------------------
-        print("\n--- Préparation Trajectoire Linéaire ---")
-        
-        ur3_client.send_cartesian_path(ur3_client.generate_math_path(
-            ur3_client.func, x_start=0.0, x_end=0.3))
-        ur3_client.wait_for_completion()
+        # print("\n--- Préparation Trajectoire Linéaire ---")
+        # pose_test = Pose(
+        # position=Point(x=-0.04, y=-0.45, z=0.15),
+        # orientation=Quaternion(x=0.0, y=1.0, z=0.0, w=0.0))
+
+        # trajectoire=[ur3_client.target_pose,pose_test,ur3_client.target_pose]
+        # traj_test=ur3_client.interpoler_poses(trajectoire,50)
+        # ur3_client.send_cartesian_path(traj_test)
+        # ur3_client.wait_for_completion()
         
         print("Script terminé avec succès.")
 

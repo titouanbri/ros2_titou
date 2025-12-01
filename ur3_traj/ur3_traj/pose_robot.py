@@ -20,7 +20,7 @@ from sensor_msgs.msg import JointState
 
 class UR3MoveItActionClient(Node):
     def __init__(self):
-        super().__init__('traj')
+        super().__init__('pose_robot')
         
         self._move_action_client = ActionClient(self, MoveGroup, 'move_action')
         self._execute_action_client = ActionClient(self, ExecuteTrajectory, 'execute_trajectory')
