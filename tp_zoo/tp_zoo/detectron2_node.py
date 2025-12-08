@@ -43,7 +43,7 @@ class Detectron2Node(Node):
         self.br = CvBridge()
 
         # Subscriber
-        self.subscription = self.create_subscription(Image,'/image_raw',self.image_callback,10)
+        self.subscription = self.create_subscription(Image,'/camera/camera/color/image_raw',self.image_callback,10)
         
         # Publisher 
         self.publisher_ = self.create_publisher(Image, '/detectron2/result', 10)

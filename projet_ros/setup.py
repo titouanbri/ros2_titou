@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'tp_zoo'
+package_name = 'projet_ros'
 
 setup(
     name=package_name,
@@ -24,10 +24,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'detectron2_node = tp_zoo.detectron2_node:main',
-            'yolo_seg_node = tp_zoo.yolo_seg_node:main',
-            'mediapip_node = tp_zoo.mediapip_node:main',
-
+            'puck_detector = projet_ros.puck_detector:main',
         ],
     },
 )
