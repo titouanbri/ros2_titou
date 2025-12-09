@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'puck_detector = projet_ros.puck_detector:main',
+            'position_base_control = projet_ros.position_base_control:main',
         ],
     },
 )
