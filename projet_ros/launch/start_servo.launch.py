@@ -78,7 +78,7 @@ def generate_launch_description():
     # On demande à ROS d'attendre 5 secondes avant de lancer cette commande
     # Cela laisse le temps à 'servo_node' de charger et de créer le service.
     delayed_start_servo = TimerAction(
-        period=5.0, 
+        period=2.0, 
         actions=[start_servo_command]
     )
     # ---------------------------------------------------

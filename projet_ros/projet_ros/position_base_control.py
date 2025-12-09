@@ -1,63 +1,69 @@
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import TwistStamped
-import sys
+import math  # Nécessaire pour sin()
 
-class ServoMover(Node):
+class OscillationMover(Node):
     def __init__(self):
-        super().__init__('servo_mover_node')
+        super().__init__('servo_oscillator')
 
-        # 1. Configuration du Publisher
-        # Le topic standard pour MoveIt Servo est souvent 'delta_twist_cmds'
-        # Vérifie si ton servo_node attend ce topic (c'est le défaut).
         self.publisher_ = self.create_publisher(TwistStamped, '/servo_node/delta_twist_cmds', 10)
         
-        # 2. Timer pour la boucle de publication
-        # Servo a besoin d'un flux continu de commandes (ex: 10Hz ou plus)
-        self.timer_period = 0.1  # 100ms (10Hz)
+        self.timer_period = 0.05  # 20Hz (plus fluide pour une courbe)
         self.timer = self.create_timer(self.timer_period, self.publish_command)
         
-        self.get_logger().info("Nœud ServoMover démarré. Le robot devrait bouger en X...")
+        # On stocke le temps de départ pour calculer le sinus
+        self.start_time = self.get_clock().now()
+
+        self.get_logger().info("Démarrage de l'oscillation dans le plan X/Y...")
 
     def publish_command(self):
         msg = TwistStamped()
-
-        # 3. Remplissage du Header
-        # Important : Le timestamp doit être actuel pour que Servo accepte la commande
         msg.header.stamp = self.get_clock().now().to_msg()
-        # Le frame de référence. Pour un UR3, c'est souvent 'base_link' ou 'base_link_inertia'
         msg.header.frame_id = 'base_link' 
 
-        # 4. Définition du mouvement (Vitesse Cartésienne)
-        # Ici, on demande une petite vitesse linéaire sur l'axe X (en m/s)
-        msg.twist.linear.x = 0.0  # 10 cm/s
-        msg.twist.linear.y = 0.0
-        msg.twist.linear.z = 0.1
-        
+        # 1. Calcul du temps écoulé en secondes
+        current_time = self.get_clock().now()
+        elapsed_duration = current_time - self.start_time
+        t = elapsed_duration.nanoseconds / 1e9  # Conversion en secondes (float)
+
+        # 2. Paramètres du mouvement
+        amplitude = 0.05  # Vitesse max en m/s (15 cm/s)
+        frequence = 0.4   # Vitesse de l'oscillation (0.5 Hz = 1 cycle complet toutes les 2 sec)
+
+        # 3. Calcul de la vitesse variable (Onde Sinusoïdale)
+        # La vitesse va varier fluidement entre -0.15 et +0.15
+        speed_oscillation = amplitude * math.sin(2 * math.pi * frequence * t)
+
+        # 4. Application sur le plan (X, Y)
+        # On applique la même oscillation sur X et Y -> Mouvement en diagonale
+        msg.twist.linear.x = speed_oscillation
+        msg.twist.linear.y = speed_oscillation
+        msg.twist.linear.z = 0.0  # On reste à la même hauteur par rapport à la table
+
         # Pas de rotation
         msg.twist.angular.x = 0.0
         msg.twist.angular.y = 0.0
         msg.twist.angular.z = 0.0
 
-        # Publication
         self.publisher_.publish(msg)
 
 def main(args=None):
     rclpy.init(args=args)
-    servo_mover = ServoMover()
+    node = OscillationMover()
 
     try:
-        rclpy.spin(servo_mover)
+        rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
-        # En quittant, on envoie une commande vide pour stopper le robot proprement
+        # Arrêt propre
         stop_msg = TwistStamped()
-        stop_msg.header.stamp = servo_mover.get_clock().now().to_msg()
+        stop_msg.header.stamp = node.get_clock().now().to_msg()
         stop_msg.header.frame_id = 'base_link'
-        servo_mover.publisher_.publish(stop_msg)
+        node.publisher_.publish(stop_msg)
         
-        servo_mover.destroy_node()
+        node.destroy_node()
         rclpy.shutdown()
 
 if __name__ == '__main__':
